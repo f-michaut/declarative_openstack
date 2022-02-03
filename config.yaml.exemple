@@ -1,0 +1,233 @@
+## Exemple configuration.
+## This is a valid and working exemple, but it should be modified to fit your
+## needs and infrastructure (it would be very surprising if the addresses
+## provided in this document match your network topology).
+
+# Minimum one controller node must be created. The controller node will be
+# responsible for orchestrating the worker nodes and managing users.
+# Configuring multiples controller nodes enables HA features. If a controller
+# goes down, another one takes his place. There only one controller in use
+# at all times.
+# This is not yet implemented.
+# (an error will be returned if you configure more than one controller)
+controller_nodes:
+  -
+    # Description is only used when printing status messages, can be empty
+    description: Controller on machine1.local
+    # ssh access is needed to install openstack on the target machines
+    ssh:
+      host: 192.168.1.12 # Can use hostnames too
+      port: 22
+      # Enviroment variables can be accessed as you would in bash
+      username: ${USER}
+      # Empty or unset password -> ssh via public key (passwordless, recommended)
+      password:
+    # Additional DNS configuration to pass to the node (defaults to empty)
+    # WARNING: will override current dns configuration on the node, even if empty.
+    dns:
+      hosts:
+      domains:
+    # Network configuration is critical. Please fill this section thoroughly.
+    # Network section must contain 'provider' and 'management'.
+    # Other networks on the machine are ignored.
+    networks:
+      # Provider referes to the network on wich users can interract with
+      # openstack services. It is usually your company network or a subnetwork.
+      # The provider network is read-only, thoses values will be used to
+      # configure public endpoints. They will be checked and an error will be
+      # returned if they do not exists on the node.
+      provider:
+        iface: ens22
+        addr: 192.168.1.12/24
+        hostname: machine1.local
+      # Management network is a private network used internally by openstack.
+      # The ip will be set during the installation, it doesn't need to be
+      # already configured. The hostname will be used and resolved internally
+      # by openstack, it will never be visible nor resolvable by users. Please
+      # ensure that there is no collision with an existing hostname.
+      management:
+        iface: ens12
+        addr: 10.1.12.12/24
+        hostname: controller
+
+# The keystone service is required, and all the services used by the worker
+# nodes must be listed here first.
+# All services have their own different options, directly taken from openstack
+# CLI commands, values, default values, arguments names and required arguments.
+# Please refer to the official documentation for more information about
+# each argument and it's purpose.
+# (A few custom parameters have been added and don't exists in openstack)
+# In addition, the tls option is available for all controller_services.
+# It will setup HTTPS for the service (usually with a proxy) and enforce it
+# on all endpoints.
+# We recommend enabling it on all services on a production enviroment.
+# It is set to False by default.
+controller_services:
+  # - keystone: # Empty service config, will use defaults
+  - keystone:
+      tls: True # Defaults to False.
+
+  - horizon:
+      tls: True
+
+  - placement:
+      custom_ressources:
+        # MUST begin with 'CUSTOM_'
+        - CUSTOM_ACCELERATOR_BOARD_X
+        - CUSTOM_ACCELERATOR_BOARD_Y
+
+  - glance:
+      images:
+        - fedora-coreos33-x86_64: # Name
+          properties:
+            - os_distro: fedora-coreos
+          disk_format: qcow2
+          container-format: bare
+          # file: # Can specify only one of url or file
+          url: https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/33.20210426.3.0/x86_64/fedora-coreos-33.20210426.3.0-openstack.x86_64.qcow2.xz
+
+  # Empty service config, will use defaults
+  - cinder:
+
+  - neutron:
+      networks:
+        - provider: # Name
+            provider_network_type: flat
+            provider_physical_network: True
+            shared: True
+            external: True
+            subnets:
+              - provider: # Name
+                dns: 8.8.8.8
+                gateway: 192.168.1.1
+                range: 192.168.1.0/24
+                pool:
+                  start: 192.168.1.100
+                  end: 192.168.1.200
+        - selfservice:
+            subnets:
+              - selfservice:
+                  dns: 8.8.8.8
+                  gateway: 10.10.3.1
+                  range: 10.10.3.0/24
+      routers:
+        - router: # Name
+          subnet: selfservice
+          external_gateway: provider
+
+  - nova:
+      keypairs:
+        - mykey: # Name
+          public-key: ~/.ssh/id_rsa.pub # Use an existing key
+        - newkey: # Name
+          keygen: # Generate a new key
+            # Equivalent to: 'ssh-keygen -b 4096 -t rsa -f ~/.ssh/id_rsa_new'
+            type: rsa
+            output: ~/.ssh/id_rsa_new
+            size: 4096
+      security_groups:
+        - default:
+            rules:
+              - icmp
+              - tcp:
+                  port: 22
+              - tcp:
+                  port: 80
+      flavors:
+        - m1.nano: # Name
+            ram: 64 # MB
+            disk: 1 # GB
+            vcpus: 1
+        - m1.tiny:
+            ram: 512
+            disk: 10
+            vcpus: 1
+        - m1.small:
+            ram: 2048
+            disk: 20
+            vcpus: 1
+        - m1.medium:
+            ram: 4096
+            disk: 40
+            vcpus: 2
+        - m1.large:
+            ram: 8192
+            disk: 80
+            vcpus: 4
+      tls: False
+
+# If you want the same node to be both a controller and a worker, just
+# configure 2 nodes with the same network and ssh configurations.
+
+# Worker nodes are the one who will do the hard work. You can set as many as
+# you want, and they don't need to share the same services (you can have a node
+# dedicated to nova, another to zun, another to cinder, ect).
+# ('worker' is equivalent to compute or storage in openstack's documentation).
+worker_nodes:
+  -
+    description: Worker node 1 on machine2.local
+    ssh:
+      host: 192.168.1.22
+      port: 22
+      username: root
+      password: password # I hope you are not using this password, right ?
+    dns:
+      hosts:
+      domains:
+    networks:
+      provider:
+        iface: ens22
+        addr: 192.168.1.22/24
+        hostname: machine2.local
+      management:
+        iface: ens12
+        addr: 10.1.12.22/24
+        hostname: compute1
+    services:
+      - nova
+      - neutron
+  -
+    description: Worker node 2 on machine3.local
+    ssh:
+      host: 192.168.1.23
+      port: 22
+      username: $USER
+      # no password: ssh-key auth
+    networks:
+      provider:
+        iface: ens22
+        addr: 192.168.1.23/24
+        hostname: machine3.local
+      management:
+        iface: ens12
+        addr: 10.1.12.23/24
+        hostname: storage1
+    services:
+      - cinder
+
+# Core openstack config
+openstack_config:
+  # This section is for you to configure additionals projects.
+  projects:
+    - myproject: # Name
+        domain: default # Defaults to default
+        description: My Project description
+
+  # This section is for you to configure additionals roles.
+  roles:
+    - myrole: # Name
+          domain: default
+          description: My role
+
+  # This section is for you to configure your openstack cloud users.
+  users:
+    - bar: # Name
+        password: $BAR_PASS
+        roles: # list of roles to add to the user, defaults to an empty list.
+          # roles and projects must exists
+          - admin:
+              project: admin
+          - myrole:
+              project: myproject
+    - foo:
+        password: $FOO_PASS
